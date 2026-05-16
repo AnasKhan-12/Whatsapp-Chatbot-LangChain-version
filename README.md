@@ -205,16 +205,3 @@ Customers can type these in WhatsApp:
 - Meta enforces a **24-hour messaging window** — you can only reply within 24hrs of a customer's last message
 
 ---
-
-## 📄 License
-
-MIT License — feel free to use and modify for your own restaurant or business.
-
----
-
-## 🙌 Acknowledgements
-
-- [LangChain](https://langchain.com) for the RAG framework
-- [Google Gemini](https://aistudio.google.com) for the LLM
-- [Meta Cloud API](https://developers.facebook.com/docs/whatsapp) for WhatsApp integration
-- [ChromaDB](https://www.trychroma.com) for vector storage
