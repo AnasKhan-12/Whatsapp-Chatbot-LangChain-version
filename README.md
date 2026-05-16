@@ -6,14 +6,8 @@ An intelligent WhatsApp chatbot for **Spice & Ember restaurant**, powered by a R
 
 ## 🎥 Demo
 
-> Customer sends a WhatsApp message → Bot reads restaurant data → Replies intelligently in seconds
+<img width="720" height="1600" alt="WhatsApp Image 2026-05-17 at 1 48 40 AM" src="https://github.com/user-attachments/assets/0ff27cf7-d185-42cc-bf1f-8f5608007533" />
 
-```
-Customer: "What are your vegetarian options?"
-Ember:    "We have several delicious vegetarian dishes at Spice & Ember!
-           Our Paneer Tikka Masala, Dal Makhani, and Vegetable Biryani
-           are customer favourites 🌿"
-```
 
 ---
 
