@@ -6,6 +6,7 @@ An intelligent WhatsApp chatbot for **Spice & Ember restaurant**, powered by a R
 
 ## 🎥 Demo
 
+<img width="960" height="678" alt="image" src="https://github.com/user-attachments/assets/29e5f476-1e7d-4300-8ba2-4128b8b09f5e" />
 
 
 ---
