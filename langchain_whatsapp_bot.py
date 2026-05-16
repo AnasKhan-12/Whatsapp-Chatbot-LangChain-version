@@ -1,21 +1,15 @@
 """
 04_langchain_whatsapp_bot.py — WhatsApp Bot with LangChain RAG
-
-IMPROVEMENTS OVER SCRATCH VERSION:
-1. Uses LangChain chat session management
-2. Built-in error handling and retry logic
-3. Streaming responses (optional)
-4. Better conversation context
-5. Async support for high traffic
+Integrated with Meta Cloud API (not Twilio)
 """
 
 import os
+import httpx
 from dotenv import load_dotenv
 from datetime import datetime
 
-from fastapi import FastAPI, Form, Response, Request
+from fastapi import FastAPI, Request, HTTPException
 from fastapi.responses import PlainTextResponse
-from twilio.twiml.messaging_response import MessagingResponse
 
 from langchain_loader import load_and_chunk_all
 from langchain_retriever import create_vector_store, load_vector_store
@@ -29,11 +23,9 @@ load_dotenv()
 
 print("🚀 Starting Spice & Ember WhatsApp Bot (LangChain Version)...")
 
-# Check if vector store exists
 if os.path.exists("./chroma_db_lc"):
     print("⚡ Loading existing vector store...")
     vectorstore = load_vector_store()
-    # Need chunks for ensemble retriever
     chunks = load_and_chunk_all(
         pdf_path="./spice_and_ember_data.pdf",
         excel_path="./spice_and_ember_menu.xlsx"
@@ -46,26 +38,51 @@ else:
     )
     vectorstore = create_vector_store(chunks)
 
-# Create session manager
 session_manager = LangChainChatSession(
     vectorstore,
     chunks,
-    memory_type="window"  # keeps last 6 turns
+    memory_type="window"
 )
 
 print("✅ Bot ready!")
 
 
 # ══════════════════════════════════════════════════════════════
+#  META CLOUD API — Send Reply
+# ══════════════════════════════════════════════════════════════
+
+async def send_whatsapp_reply(to: str, message: str):
+    """
+    Sends a reply back to the user via Meta Cloud API.
+    CHANGED: Replaced Twilio TwiML response with a direct POST
+    to Meta's graph API. Meta doesn't use TwiML — it expects
+    a separate outbound HTTP call to /messages.
+    """
+    url = f"https://graph.facebook.com/v19.0/{os.getenv('PHONE_NUMBER_ID')}/messages"
+    headers = {
+        "Authorization": f"Bearer {os.getenv('WHATSAPP_TOKEN')}",
+        "Content-Type": "application/json"
+    }
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": to,
+        "type": "text",
+        "text": {"body": message}
+    }
+    async with httpx.AsyncClient() as client:
+        resp = await client.post(url, json=payload, headers=headers)
+        resp.raise_for_status()
+
+
+# ══════════════════════════════════════════════════════════════
 #  FASTAPI APP
 # ══════════════════════════════════════════════════════════════
 
-app = FastAPI(title="Spice & Ember Bot (LangChain)")
+app = FastAPI(title="Spice & Ember Bot (LangChain + Meta Cloud API)")
 
 
 @app.get("/")
 async def health_check():
-    """Homepage with status"""
     return {
         "status": "running",
         "bot": "Spice & Ember WhatsApp Bot 🔥 (LangChain Version)",
@@ -75,51 +92,95 @@ async def health_check():
             "Contextual compression",
             "Conversation memory (window strategy)",
             "Semantic chunking",
-            "Self-query metadata extraction"
+            "Meta Cloud API integration"
         ],
         "message": "Bot is live and ready!",
         "timestamp": datetime.now().isoformat()
     }
 
 
+# ══════════════════════════════════════════════════════════════
+#  WEBHOOK — Verification (GET) + Incoming Messages (POST)
+# ══════════════════════════════════════════════════════════════
+
 @app.get("/webhook")
-async def webhook_verify():
-    """Twilio webhook verification"""
-    return Response(content="OK", status_code=200)
+def verify_webhook(request: Request):
+    """
+    Meta calls this once when you register your webhook URL.
+    It sends hub.mode, hub.verify_token, hub.challenge.
+    We must echo back hub.challenge if the token matches.
+
+    CHANGED: Added this endpoint. Original file had it but also
+    imported HTTPException without using it — fixed that too.
+    """
+    mode = request.query_params.get("hub.mode")
+    token = request.query_params.get("hub.verify_token")
+    challenge = request.query_params.get("hub.challenge")
+
+    if mode == "subscribe" and token == os.getenv("VERIFY_TOKEN"):
+        print("✅ Webhook verified by Meta!")
+        return PlainTextResponse(challenge)
+
+    print("❌ Webhook verification failed — token mismatch")
+    raise HTTPException(status_code=403, detail="Verification failed")
 
 
 @app.post("/webhook")
-async def whatsapp_webhook(
-    From: str = Form(...),
-    Body: str = Form(...),
-    NumMedia: int = Form(0),
-):
+async def receive_message(request: Request):
     """
-    Main webhook — receives WhatsApp messages from Twilio.
-    
-    IMPROVEMENTS OVER SCRATCH VERSION:
-    - LangChain handles context automatically
-    - Better error messages
-    - Conversation memory built-in
-    - Retry logic in LangChain chains
-    """
-    user_id = From
-    message = Body.strip()
+    Meta posts every incoming WhatsApp message here as JSON.
 
-    print(f"\n📱 Message from {user_id}: {message}")
+    CHANGED (major):
+    - Removed Twilio Form(...) parameters and TwiML response entirely.
+      Twilio uses form-encoded POST + TwiML XML reply.
+      Meta uses JSON POST + separate outbound API call to send reply.
+    - Removed duplicate @app.post("/webhook") route (was defined twice).
+    - Properly extracts sender phone + message text from Meta's payload
+      structure: data.entry[0].changes[0].value.messages[0]
+    - Calls send_whatsapp_reply() instead of returning TwiML.
+    - Returns 200 OK immediately (Meta requires this — if you don't
+      respond with 200 fast, it retries the webhook repeatedly).
+    """
+    data = await request.json()
+
+    # Meta wraps everything in entry → changes → value
+    try:
+        entry = data["entry"][0]
+        change = entry["changes"][0]["value"]
+
+        # Ignore non-message events (status updates, read receipts, etc.)
+        if "messages" not in change:
+            return {"status": "ignored"}
+
+        msg = change["messages"][0]
+        user_phone = msg["from"]          # e.g. "923001234567"
+        message_type = msg.get("type")
+
+        # Only handle text messages for now
+        if message_type != "text":
+            await send_whatsapp_reply(
+                user_phone,
+                "Sorry, I can only handle text messages right now! 🙏"
+            )
+            return {"status": "ok"}
+
+        message = msg["text"]["body"].strip()
+
+    except (KeyError, IndexError):
+        # Malformed payload — return 200 anyway so Meta doesn't retry
+        return {"status": "ok"}
+
+    print(f"\n📱 Message from {user_phone}: {message}")
 
     # Handle reset commands
     if message.lower() in ["reset", "start", "restart"]:
-        session_manager.reset_session(user_id)
+        session_manager.reset_session(user_phone)
         response_text = "Hi! 👋 I'm Ember, your assistant for Spice & Ember restaurant. How can I help you today? 🔥"
     else:
         try:
-            # Get response from LangChain RAG chain
-            response_text = session_manager.chat(user_id, message)
+            response_text = session_manager.chat(user_phone, message)
         except Exception as e:
             print(f"❌ Error: {e}")
-            
-            # Provide helpful error messages
             if "429" in str(e) or "quota" in str(e).lower():
                 response_text = "Sorry, I'm a bit busy right now! Try again in a few minutes 🙏"
             elif "timeout" in str(e).lower():
@@ -129,16 +190,19 @@ async def whatsapp_webhook(
 
     print(f"🔥 Ember: {response_text}")
 
-    # Build TwiML response
-    twiml = MessagingResponse()
-    twiml.message(response_text)
+    # Send reply via Meta Cloud API
+    await send_whatsapp_reply(user_phone, response_text)
 
-    return Response(content=str(twiml), media_type="application/xml")
+    # Always return 200 to Meta
+    return {"status": "ok"}
 
+
+# ══════════════════════════════════════════════════════════════
+#  STATS + RESET ENDPOINTS
+# ══════════════════════════════════════════════════════════════
 
 @app.get("/stats")
 async def get_stats():
-    """Statistics endpoint — shows active sessions"""
     return {
         "active_sessions": len(session_manager.sessions),
         "session_ids": list(session_manager.sessions.keys()),
@@ -149,7 +213,6 @@ async def get_stats():
 
 @app.post("/reset/{user_id}")
 async def reset_user_session(user_id: str):
-    """Reset a specific user's conversation"""
     session_manager.reset_session(user_id)
     return {"status": "success", "message": f"Session reset for {user_id}"}
 
@@ -160,15 +223,9 @@ async def reset_user_session(user_id: str):
 
 if __name__ == "__main__":
     import uvicorn
-    
-    print("\n🔥 Spice & Ember WhatsApp Bot — LangChain Version")
+
+    print("\n🔥 Spice & Ember WhatsApp Bot — LangChain + Meta Cloud API")
     print("   Webhook URL: http://localhost:8000/webhook")
-    print("   For production: Use Render/Railway URL + /webhook")
-    print("   Stats endpoint: http://localhost:8000/stats\n")
-    
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=8000,
-        log_level="info"
-    )
+    print("   Stats:       http://localhost:8000/stats\n")
+
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
