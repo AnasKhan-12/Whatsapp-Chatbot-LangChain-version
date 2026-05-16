@@ -65,7 +65,7 @@ Customer receives answer on WhatsApp
 | Layer | Technology |
 |-------|-----------|
 | LLM | Google Gemini (via `langchain-google-genai`) |
-| RAG Framework | LangChain + LCEL |
+| RAG Framework | LangChain |
 | Vector Store | ChromaDB |
 | Keyword Search | BM25 (`rank-bm25`) |
 | Embeddings | Sentence Transformers |
